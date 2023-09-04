@@ -1,0 +1,92 @@
+heat_template_version: '2018-08-31'
+
+
+resources:
+
+  master_config:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash -v
+        echo "master start....."
+        echo -e "[base]\nname=CentOS- - Base\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/os/\$basearch/\nenabled=1\ngpgcheck=0\n[updates]\nname=CentOS- - Updates\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/updates/\$basearch/\nenabled=1\ngpgcheck=0\n[extras]\nname=CentOS- - Extras\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/extras/\$basearch/\nenabled=1\ngpgcheck=0">/etc/yum.repos.d/CentOS-Base.repo
+        echo -e "[centos-openstack-stein]\nname=CentOS-7 - OpenStack stein\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/cloud/\$basearch/openstack-stein/\ngpgcheck=0\nenabled=1\nexclude=sip,PyQt4">/etc/yum.repos.d/CentOS-OpenStack-stein.repo
+        yum clean all
+        yum makecache
+        yum -y install redis
+        systemctl endable redis.service
+        systemctl start redis.service
+        mkdir -p /data/redis
+        echo -e "daemonize yes\nbind 0.0.0.0\nport 6379\ndbfilename dump.rdb\ndir /data/redis" > /etc/redis.conf
+        chown -R redis:redis /data/redis
+        sysctl vm.overcommit_memory=1
+        systemctl restart redis.service
+        echo "master end....."
+        
+  slave_config:
+    type: OS::Heat::SoftwareConfig
+    depends_on: master_node
+    properties:
+      group: ungrouped
+      config: 
+        str_replace:
+          template: |
+            #!/bin/bash -v
+            echo "slave start....."
+            echo "master ip ---->  $master_ip"
+            echo -e "[base]\nname=CentOS- - Base\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/os/\$basearch/\nenabled=1\ngpgcheck=0\n[updates]\nname=CentOS- - Updates\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/updates/\$basearch/\nenabled=1\ngpgcheck=0\n[extras]\nname=CentOS- - Extras\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/extras/\$basearch/\nenabled=1\ngpgcheck=0">/etc/yum.repos.d/CentOS-Base.repo
+            echo -e "[centos-openstack-stein]\nname=CentOS-7 - OpenStack stein\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/cloud/\$basearch/openstack-stein/\ngpgcheck=0\nenabled=1\nexclude=sip,PyQt4">/etc/yum.repos.d/CentOS-OpenStack-stein.repo
+            yum clean all
+            yum makecache
+            yum -y install redis
+            systemctl endable redis.service
+            systemctl start redis.service
+            mkdir -p /data/redis
+            echo -e "daemonize yes\nbind 0.0.0.0\nport 26379\nslaveof $master_ip 6379\ndbfilename dump.rdb\ndir /data/redis" > /etc/redis.conf
+            chown -R redis:redis /data/redis
+            sysctl vm.overcommit_memory=1
+            systemctl restart redis.service
+            echo "slave end....."
+          params:
+            $master_ip: {get_attr: [master_node, first_address] }
+       
+
+  master_node:
+    type: OS::Nova::Server
+    properties:
+      admin_pass: ''
+      availability_zone: nova:compute02
+      image: ea2e93ae-552e-4b3f-bdee-438887e13eb0
+      flavor: 2-2-20
+      user_data: {get_resource: master_config}
+      user_data_format: SOFTWARE_CONFIG
+      networks:
+        - network: a3e150b8-4221-46c7-a705-843228510d0b
+          subnet: 8fb62dba-fd9e-4c60-8626-db255c996f1c
+      security_groups:
+        - default
+      name: redis_master
+      diskConfig: AUTO
+  slave_node:
+    type: OS::Nova::Server
+    depends_on: master_node
+    properties:
+      admin_pass: ''
+      availability_zone: nova:compute02
+      image: ea2e93ae-552e-4b3f-bdee-438887e13eb0
+      flavor: 2-2-20
+      user_data: {get_resource: slave_config}
+      user_data_format: SOFTWARE_CONFIG
+      networks:
+        - network: a3e150b8-4221-46c7-a705-843228510d0b
+          subnet: 8fb62dba-fd9e-4c60-8626-db255c996f1c
+      security_groups:
+        - default
+      name: redis_slave
+      diskConfig: AUTO
+
+outputs:
+  master_ip:
+    description: master node ip
+    value: {get_attr: [master_node, first_address]}

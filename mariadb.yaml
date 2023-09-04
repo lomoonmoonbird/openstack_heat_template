@@ -1,0 +1,44 @@
+heat_template_version: '2018-08-31'
+resources:
+  single_config:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash -v
+        echo "server start....."
+        echo -e "[base]\nname=CentOS- - Base\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/os/\$basearch/\nenabled=1\ngpgcheck=0\n[updates]\nname=CentOS- - Updates\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/updates/\$basearch/\nenabled=1\ngpgcheck=0\n[extras]\nname=CentOS- - Extras\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/extras/\$basearch/\nenabled=1\ngpgcheck=0">/etc/yum.repos.d/CentOS-Base.repo
+        echo -e "[centos-openstack-stein]\nname=CentOS-7 - OpenStack stein\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/cloud/\$basearch/openstack-stein/\ngpgcheck=0\nenabled=1\nexclude=sip,PyQt4">/etc/yum.repos.d/CentOS-OpenStack-stein.repo
+        yum clean all
+        yum makecache
+        yum -y install mariadb mariadb-server
+        touch /var/log/mariadb/mariadb.log
+        chown mysql.mysql /var/log/mariadb/mariadb.log
+        systemctl enable mariadb.service
+        systemctl start mariadb.service
+
+        mysqladmin -u root password comleader@123
+        cat << EOF | mysql -u root --password=comleader@123
+        CREATE DATABASE my_db;
+        GRANT ALL PRIVILEGES ON my_db.* TO "root"@"localhost" IDENTIFIED BY "comleader@123";
+        FLUSH PRIVILEGES;
+        EXIT
+        EOF
+        echo "server end....."
+  server:
+    type: OS::Nova::Server
+    properties:
+      admin_pass: ''
+      availability_zone: nova:compute02
+      image: ea2e93ae-552e-4b3f-bdee-438887e13eb0
+      flavor: 2-2-20
+      user_data:
+        get_resource: single_config
+      user_data_format: SOFTWARE_CONFIG
+      networks:
+        - network: a3e150b8-4221-46c7-a705-843228510d0b
+          subnet: 8fb62dba-fd9e-4c60-8626-db255c996f1c
+      security_groups:
+        - default
+      name: mariadb
+      diskConfig: AUTO

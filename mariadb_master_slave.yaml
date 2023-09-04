@@ -1,0 +1,121 @@
+heat_template_version: '2018-08-31'
+
+
+resources:
+
+  master_config:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash -v
+        echo "master start....."
+        echo "slave ip -----> $slave_ip"
+        echo -e "[base]\nname=CentOS- - Base\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/os/\$basearch/\nenabled=1\ngpgcheck=0\n[updates]\nname=CentOS- - Updates\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/updates/\$basearch/\nenabled=1\ngpgcheck=0\n[extras]\nname=CentOS- - Extras\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/extras/\$basearch/\nenabled=1\ngpgcheck=0">/etc/yum.repos.d/CentOS-Base.repo
+        echo -e "[centos-openstack-stein]\nname=CentOS-7 - OpenStack stein\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/cloud/\$basearch/openstack-stein/\ngpgcheck=0\nenabled=1\nexclude=sip,PyQt4">/etc/yum.repos.d/CentOS-OpenStack-stein.repo
+        yum clean all
+        yum makecache
+        yum -y install mariadb mariadb-server
+        touch /var/log/mariadb/mariadb.log
+        chown mysql.mysql /var/log/mariadb/mariadb.log
+        echo -e "LimitNOFILE=100000\nLimitMEMLOCK=100000" >> /usr/lib/systemd/system/mariadb.service
+        systemctl start mariadb.service
+
+        
+
+        mysqladmin -u root password comleader@123
+        cat << EOF | mysql -u root --password=comleader@123
+        GRANT REPLICATION SLAVE ON *.* TO 'copy'@'%' IDENTIFIED BY 'comleader@123';
+        FLUSH PRIVILEGES;
+        EXIT
+        EOF
+
+        mkdir -p /data/mysql
+        mkdir -p /data/logbin/mysql-bin
+        echo -e "[mysqld]\nserver-id=1\nbinlog-format=row\nlog_bin=/data/logbin/mysql-bin\nlog-basename=master\ncharacter_set_server=utf8\ndefault_storage_engine=InnoDB\ndatadir=/data/mysql\nsocket=/var/lib/mysql/mysql.sock\n[mysqld_safe]\nlog-error=/var/log/mariadb/mariadb.log\npid-file=/var/run/mariadb/mariadb.pid\n`echo \!`includedir /etc/my.cnf.d" > /etc/my.cnf
+        chown -R mysql:mysql /data/mysql
+        chown -R mysql:mysql /data/logbin/mysql-bin
+        sysctl vm.overcommit_memory=1
+        systemctl endable mariadb.service
+        systemctl restart mariadb.service
+        echo "master end....."
+
+
+  slave_config:
+    type: OS::Heat::SoftwareConfig
+    depends_on: master_node
+    properties:
+      group: ungrouped
+      config: 
+        str_replace:
+          template: |
+            #!/bin/bash -v
+            echo "slave start....."
+            echo "master ip -----> $master_ip"
+            echo -e "[base]\nname=CentOS- - Base\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/os/\$basearch/\nenabled=1\ngpgcheck=0\n[updates]\nname=CentOS- - Updates\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/updates/\$basearch/\nenabled=1\ngpgcheck=0\n[extras]\nname=CentOS- - Extras\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/extras/\$basearch/\nenabled=1\ngpgcheck=0">/etc/yum.repos.d/CentOS-Base.repo
+            echo -e "[centos-openstack-stein]\nname=CentOS-7 - OpenStack stein\nbaseurl=http://192.168.66.196:8080/centos/\$releasever/cloud/\$basearch/openstack-stein/\ngpgcheck=0\nenabled=1\nexclude=sip,PyQt4">/etc/yum.repos.d/CentOS-OpenStack-stein.repo
+            yum clean all
+            yum makecache
+            yum -y install mariadb mariadb-server
+            touch /var/log/mariadb/mariadb.log
+            chown mysql.mysql /var/log/mariadb/mariadb.log
+
+            mkdir -p /data/mysql
+            echo -e "[mysqld]\nserver-id=2\nread_only=ON\nrelay_log=relay-log\nrelay_log_index=relay-log.index\ndatadir=/data/mysql\nsocket=/var/lib/mysql/mysql.sock\n[myqsld_safe]\nlog-error=/var/log/mariadb/mariadb.log\npid-file=/var/run/mariadb/mariadb.pid\n`echo \!`includedir /etc/my.cnf.d" > /etc/my.cnf
+            chown -R mysql:mysql /data/mysql
+            systemctl start mariadb.service
+            mysqladmin -u root password comleader@123
+            cat << EOF | mysql -u root --password=comleader@123
+            CHANGE MASTER TO MASTER_HOST="$master_ip",MASTER_USER='copy',MASTER_PASSWORD='comleader@123',MASTER_PORT=3306,MASTER_LOG_FILE='master-bin.000001',MASTER_LOG_POS=0,MASTER_CONNECT_RETRY=10;
+            START SLAVE;
+            EXIT
+            EOF
+
+            systemctl endable mariadb.service
+            systemctl restart mariadb.service
+            echo "slave end....."
+          params:
+            $master_ip: {get_attr: [master_node, first_address] }
+       
+
+  master_node:
+    type: OS::Nova::Server
+    properties:
+      admin_pass: ''
+      availability_zone: nova:compute02
+      image: ea2e93ae-552e-4b3f-bdee-438887e13eb0
+      flavor: 2-2-20
+      user_data: {get_resource: master_config}
+      user_data_format: SOFTWARE_CONFIG
+      networks:
+        - network: a3e150b8-4221-46c7-a705-843228510d0b
+          subnet: 8fb62dba-fd9e-4c60-8626-db255c996f1c
+      security_groups:
+        - default
+      name: mariadb_master
+      diskConfig: AUTO
+  slave_node:
+    type: OS::Nova::Server
+    depends_on: master_node
+    properties:
+      admin_pass: ''
+      availability_zone: nova:compute02
+      image: ea2e93ae-552e-4b3f-bdee-438887e13eb0
+      flavor: 2-2-20
+      user_data: {get_resource: slave_config}
+      user_data_format: SOFTWARE_CONFIG
+      networks:
+        - network: a3e150b8-4221-46c7-a705-843228510d0b
+          subnet: 8fb62dba-fd9e-4c60-8626-db255c996f1c
+      security_groups:
+        - default
+      name: mariadb_slave
+      diskConfig: AUTO
+
+outputs:
+  master_ip:
+    description: master node ip
+    value: {get_attr: [master_node, first_address]}
+  slave_ip:
+    description: slave node ip
+    value: {get_attr: [slave_node, first_address]}
